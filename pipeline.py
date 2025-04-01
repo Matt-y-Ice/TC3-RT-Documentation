@@ -181,7 +181,7 @@ def main_pipeline(frame_queue, processed_queue, stop_event):
 # ==============================================
 def annotate_frame(frame, detections, keypoints):
     """
-    Draw bounding boxes and keypoints on the frame, including pose connections.
+    Draw bounding boxes and keypoints on the frame.
     """
     annotated = frame.copy()
 
@@ -202,35 +202,8 @@ def annotate_frame(frame, detections, keypoints):
             cv2.putText(annotated, label, (x1, max(y1-5, 10)),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
-    # Draw pose skeleton and keypoints
+    # Draw keypoints only (removed pose connections)
     if keypoints and len(keypoints) >= 17:  # YOLO pose has 17 keypoints
-        # Draw connections first (skeleton)
-        for connection in POSE_CONNECTIONS:
-            start_idx, end_idx = connection[0] - 1, connection[1] - 1  # Adjust for 0-based indexing
-            
-            if start_idx < len(keypoints) and end_idx < len(keypoints):
-                start_point = keypoints[start_idx]
-                end_point = keypoints[end_idx]
-                
-                # Only draw if both points have good confidence
-                if start_point[2] > 0.2 and end_point[2] > 0.2:
-                    start_pos = (int(start_point[0]), int(start_point[1]))
-                    end_pos = (int(end_point[0]), int(end_point[1]))
-                    
-                    # Ensure coordinates are within bounds
-                    start_pos = (
-                        max(0, min(start_pos[0], frame.shape[1]-1)),
-                        max(0, min(start_pos[1], frame.shape[0]-1))
-                    )
-                    end_pos = (
-                        max(0, min(end_pos[0], frame.shape[1]-1)),
-                        max(0, min(end_pos[1], frame.shape[0]-1))
-                    )
-                    
-                    # Draw the connection line
-                    cv2.line(annotated, start_pos, end_pos, (0, 255, 255), 2)
-
-        # Draw keypoints on top
         for kx, ky, kconf in keypoints:
             if kconf > 0.2:  # Only draw keypoints with confidence > 0.2
                 kx, ky = int(kx), int(ky)
@@ -242,11 +215,6 @@ def annotate_frame(frame, detections, keypoints):
                 # Draw keypoint circle
                 cv2.circle(annotated, (kx, ky), 4, (255, 0, 0), -1)
                 cv2.circle(annotated, (kx, ky), 2, (255, 255, 255), -1)
-                
-                # Optionally draw confidence
-                # label = f"{kconf:.2f}"
-                # cv2.putText(annotated, label, (kx+5, ky),
-                #            cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 0, 0), 1)
 
     return annotated
 
