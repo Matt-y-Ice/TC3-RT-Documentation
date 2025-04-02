@@ -1,0 +1,21 @@
+# Ignore MP4 video files
+*.mp4
+
+# Ignore output directory
+output/
+
+# Ignore Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Ignore virtual environment
+venv/
+env/
+ENV/
+
+# Ignore IDE specific files
+.vscode/
+.idea/
+*.swp
+*.swo 
