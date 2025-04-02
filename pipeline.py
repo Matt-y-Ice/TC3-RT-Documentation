@@ -31,6 +31,27 @@ POSE_CONNECTIONS = [
     [2, 4], [3, 5], [4, 6], [5, 7]                                        # legs
 ]
 
+# Define keypoint-joint dictionary
+joint_names = {
+    0: "nose",
+    1: "left_eye",
+    2: "right_eye",
+    3: "left_ear",
+    4: "right_ear",
+    5: "left_shoulder",
+    6: "right_shoulder",
+    7: "left_elbow",
+    8: "right_elbow",
+    9: "left_wrist",
+    10: "right_wrist",
+    11: "left_hip",
+    12: "right_hip",
+    13: "left_knee",
+    14: "right_knee",
+    15: "left_ankle",
+    16: "right_ankle"
+}
+
 # ==============================================
 # Thread 1: Frame Capture
 # ==============================================
@@ -125,7 +146,7 @@ def main_pipeline(frame_queue, processed_queue, stop_event):
             # Results containers
             detection_results = [None] * BATCH_SIZE
             pose_results = [None] * BATCH_SIZE
-
+            localization_results = []
             def detection_worker():
                 # Run YOLO detection
                 results = object_model(batch_for_detection)
@@ -147,14 +168,24 @@ def main_pipeline(frame_queue, processed_queue, stop_event):
                         pose_results[i] = [(x, y, conf) for x, y, conf in keypoints]
                     else:
                         pose_results[i] = []
+                
+            def observer_worker():
+                for i in range(len(pose_results)):
+                    local = get_closest_joint(detection_results[i], pose_results[i])
+                    if local not in localization_results:
+                        localization_results.append(local)
+                print(localization_results)
 
             # Create and run threads
             t_detect = threading.Thread(target=detection_worker)
             t_pose = threading.Thread(target=pose_worker)
+            t_observer = threading.Thread(target=observer_worker)
             t_detect.start()
             t_pose.start()
             t_detect.join()
             t_pose.join()
+            t_observer.start()
+            t_observer.join()
 
             # Post-process and annotate frames
             annotated_batch = []
@@ -250,6 +281,45 @@ def annotate_frame(frame, detections, keypoints):
 
     return annotated
 
+# ==============================================
+# Observer Function:
+#   - Calculates Euclidean distance between bounding box and keypoints
+#   - Returns nearest "joint" where medical device is detected
+# ==============================================
+def get_closest_joint(detections, keypoints):
+    """
+    Given a detection bounding box and a list of keypoints (tuples of at least (x, y)),
+    return the joint that is closest to the box center.
+
+    Parameters:
+      detection_box: list or tuple of [x1, y1, x2, y2]
+      keypoints: list of tuples, each tuple containing (x, y) coordinates. Additional elements in the tuple are ignored.
+
+    Returns:
+      A list [joint_index, (x, y), distance] for the joint closest to the detection box center.
+    """
+    # Unpack the detection box and compute its center
+    for box in detections:
+        x1, y1, x2, y2, conf, cls_id = box
+        x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
+
+    center_x = (x1 + x2) / 2.0
+    center_y = (y1 + y2) / 2.0
+
+    min_distance = float("inf")
+    closest_joint_index = None
+
+    # Loop through each keypoint and compute the Euclidean distance to the box center
+    for i, kp in enumerate(keypoints):
+        # Each keypoint is a tuple; take the first two values as x and y.
+        x, y = kp[:2]
+        distance = ((x - center_x) ** 2 + (y - center_y) ** 2) ** 0.5
+        if distance < min_distance:
+            min_distance = distance
+            closest_joint_index = i
+
+
+    return [cls_id, closest_joint_index]
 # ==============================================
 # Thread 3: Video Writer
 #   - Continuously read annotated frames from processed_queue
