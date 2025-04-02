@@ -62,7 +62,7 @@ class App:
         self.is_recording = False
         
         # Load YOLO models
-        self.object_model = YOLO("yolo11n.pt")
+        self.object_model = YOLO("multi_class.pt")
         self.pose_model = YOLO("yolo11n-pose.pt")
 
         # Create output directory if it doesn't exist
