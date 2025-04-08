@@ -88,9 +88,9 @@ class TourniquetObserver:
     A tourniquet is considered "applied" when its center position remains stable
     (within TOURNIQUET_STABILITY_THRESHOLD pixels) for TOURNIQUET_STABILITY_FRAMES consecutive frames.
     """
-    def __init__(self, app, stop_event):
+    def __init__(self, app, observer_stop_event):
         self.app = app
-        self.stop_event = stop_event
+        self.observer_stop_event = observer_stop_event
         self.track_centers = {}  # Dictionary to store center positions for each track
         self.track_stability = {}  # Dictionary to store stability counters for each track
         self.applied_tracks = set()  # Set of track IDs that have been marked as applied
@@ -229,7 +229,7 @@ class TourniquetObserver:
         
         # Extract just the first line for GUI display (removes position, confidence, and bbox info)
         gui_message = message.split('\n')[0]
-        formatted_message = f"{timestamp} {gui_message}\n"
+        formatted_message = f"VIDEO: {timestamp} {gui_message}\n"
         
         # Update the text area in the main thread
         self.app.root.after(0, lambda: self._update_text_area(formatted_message))
@@ -301,7 +301,7 @@ class TourniquetObserver:
         frame_count = 0
         last_log_time = time.time()
         
-        while not self.stop_event.is_set():
+        while not self.observer_stop_event.is_set():
             try:
                 # Get a copy of the active tracks to avoid race conditions
                 active_tracks = self.app.active_tracks.copy()
@@ -352,6 +352,10 @@ class TourniquetObserver:
                             f"  Confidence: {track['confidence']:.3f}\n"
                             f"  Bounding Box: {track['bbox']}"
                         )
+                        
+                        # Stop only the observer thread, not the entire pipeline
+                        self.observer_stop_event.set()
+                        break
                 
                 # Check for temporarily lost tracks
                 for track_id in list(self.track_centers.keys()):
@@ -431,6 +435,7 @@ class App:
         self.frame_queue = queue.Queue(maxsize=20)
         self.processed_queue = queue.Queue(maxsize=20)
         self.stop_event = threading.Event()
+        self.observer_stop_event = threading.Event()
         
         # Initialize display buffer
         self.display_buffer = deque(maxlen=DISPLAY_BUFFER_SIZE)
@@ -1123,6 +1128,7 @@ class App:
     def start_pipeline(self):
         """Start the video pipeline threads"""
         self.stop_event.clear()
+        self.observer_stop_event.clear()
         self.pipeline_running = True
         
         # Clear queues and buffers
@@ -1148,14 +1154,23 @@ class App:
         self.pipeline_thread = threading.Thread(target=self.process_frames, daemon=True)
         self.pipeline_thread.start()
         
-        # Start tourniquet observer
-        self.tourniquet_observer = TourniquetObserver(self, self.stop_event)
+        # Start tourniquet observer with its dedicated stop event
+        self.tourniquet_observer = TourniquetObserver(self, self.observer_stop_event)
         
         print("Starting video pipeline...")
 
     def stop_pipeline(self):
         """Stop the video pipeline threads"""
-        self.stop_event.set()
+        # --- Diagnostic Logging --- >
+        logging.warning(f"stop_pipeline called. Current pipeline_running state: {self.pipeline_running}") 
+        import traceback 
+        logging.warning("Stack trace leading to stop_pipeline:\n" + "".join(traceback.format_stack()))
+        # --- End Diagnostic Logging ---
+        
+        self.stop_event.set() # Signal main pipeline threads to stop
+        if self.tourniquet_observer: # Signal observer thread to stop
+             self.observer_stop_event.set()
+             
         self.pipeline_running = False
         
         # Wait for threads to finish
