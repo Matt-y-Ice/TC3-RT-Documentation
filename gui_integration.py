@@ -14,6 +14,9 @@ from collections import deque
 from datetime import datetime
 import os
 from scipy.optimize import linear_sum_assignment
+import logging
+import math
+import sys
 
 warnings.filterwarnings("ignore", category=UserWarning)
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -45,6 +48,14 @@ MAX_TRACK_GAP = 3  # Reduced maximum gap between detections
 MAX_TRACK_AGE = 5  # Maximum age of a track without updates
 MIN_TRACK_CONFIDENCE = 0.2  # Minimum confidence to maintain a track
 
+# Tourniquet observer parameters
+TOURNIQUET_STABILITY_THRESHOLD = 50  # pixels
+TOURNIQUET_STABILITY_FRAMES = 30
+TOURNIQUET_STABILITY_PERCENTAGE = 0.8  # 80% of frames must be stable
+DEBUG_LOG_MAX_SIZE = 1024 * 1024  # 1MB max size for debug log files
+DEBUG_LOG_BACKUP_COUNT = 5  # Number of backup log files to keep
+DEBUG_LOG_DIR = os.path.join("output", "logs")  # Directory for debug logs
+
 # Multi-scale detection parameters
 SCALE_FACTORS = [0.8, 1.0, 1.2]  # Different scales to try
 SCALE_CONFIDENCE_WEIGHTS = [0.8, 1.0, 0.8]  # Weights for each scale
@@ -66,6 +77,350 @@ POSE_CONNECTIONS = [
     [6, 7], [6, 8], [7, 9], [8, 10], [9, 11], [2, 3], [1, 2], [1, 3],    # body and face
     [2, 4], [3, 5], [4, 6], [5, 7]                                        # legs
 ]
+
+# Ensure debug log directory exists
+if not os.path.exists(DEBUG_LOG_DIR):
+    os.makedirs(DEBUG_LOG_DIR, exist_ok=True)
+
+class TourniquetObserver:
+    """
+    Observer class that monitors tourniquet tracks to detect when they've been applied.
+    A tourniquet is considered "applied" when its center position remains stable
+    (within TOURNIQUET_STABILITY_THRESHOLD pixels) for TOURNIQUET_STABILITY_FRAMES consecutive frames.
+    """
+    def __init__(self, app, stop_event):
+        self.app = app
+        self.stop_event = stop_event
+        self.track_centers = {}  # Dictionary to store center positions for each track
+        self.track_stability = {}  # Dictionary to store stability counters for each track
+        self.applied_tracks = set()  # Set of track IDs that have been marked as applied
+        self.track_last_seen = {}  # Dictionary to store when each track was last seen
+        self.track_history = {}  # Dictionary to store historical positions for each track
+        
+        # Setup logging
+        self.setup_logging()
+        
+        # Start the observer thread
+        self.observer_thread = threading.Thread(target=self.run, daemon=True)
+        self.observer_thread.start()
+    
+    def setup_logging(self):
+        """Setup logging to a rotating file with enhanced debugging information"""
+        log_file = os.path.join(DEBUG_LOG_DIR, "debug.log")
+        
+        try:
+            # Configure logging with a custom formatter that includes more details
+            formatter = logging.Formatter(
+                '%(asctime)s - %(levelname)s - [%(threadName)s] - %(message)s',
+                datefmt='%Y-%m-%d %H:%M:%S.%f'
+            )
+            
+            # Create a rotating file handler with size limit and backup count
+            file_handler = logging.RotatingFileHandler(
+                log_file,
+                maxBytes=DEBUG_LOG_MAX_SIZE,
+                backupCount=DEBUG_LOG_BACKUP_COUNT,
+                mode='a'  # Append mode
+            )
+            file_handler.setFormatter(formatter)
+            file_handler.setLevel(logging.DEBUG)
+            
+            # Create a console handler for immediate feedback
+            console_handler = logging.StreamHandler()
+            console_handler.setFormatter(formatter)
+            console_handler.setLevel(logging.INFO)
+            
+            # Get the root logger and configure it
+            logger = logging.getLogger()
+            logger.setLevel(logging.DEBUG)
+            
+            # Remove any existing handlers to avoid duplicates
+            for handler in logger.handlers[:]:
+                logger.removeHandler(handler)
+            
+            # Add our handlers
+            logger.addHandler(file_handler)
+            logger.addHandler(console_handler)
+            
+            # Test write to the log file
+            logging.info(
+                "Tourniquet Observer initialized with enhanced logging\n"
+                f"Debug log file: {log_file}\n"
+                f"Max log size: {DEBUG_LOG_MAX_SIZE/1024/1024:.1f}MB\n"
+                f"Backup count: {DEBUG_LOG_BACKUP_COUNT}\n"
+                f"Stability threshold: {TOURNIQUET_STABILITY_THRESHOLD} pixels\n"
+                f"Stability frames: {TOURNIQUET_STABILITY_FRAMES}\n"
+                f"Stability percentage: {TOURNIQUET_STABILITY_PERCENTAGE*100}%"
+            )
+            
+            # Log system information
+            logging.debug(
+                "System Information:\n"
+                f"Python version: {sys.version}\n"
+                f"OpenCV version: {cv2.__version__}\n"
+                f"Working directory: {os.getcwd()}\n"
+                f"Log directory: {DEBUG_LOG_DIR}\n"
+                f"Log file permissions: {oct(os.stat(log_file).st_mode)[-3:]}"
+            )
+            
+        except Exception as e:
+            print(f"Error setting up logging: {e}")
+            import traceback
+            print(traceback.format_exc())
+    
+    def calculate_center(self, bbox):
+        """Calculate the center point of a bounding box"""
+        x1, y1, x2, y2 = bbox
+        return ((x1 + x2) / 2, (y1 + y2) / 2)
+    
+    def calculate_distance(self, point1, point2):
+        """Calculate Euclidean distance between two points"""
+        return math.sqrt((point1[0] - point2[0])**2 + (point1[1] - point2[1])**2)
+    
+    def calculate_average_center(self, centers):
+        """Calculate the average center position from a list of centers"""
+        if not centers:
+            return None
+        
+        x_sum = sum(center[0] for center in centers)
+        y_sum = sum(center[1] for center in centers)
+        count = len(centers)
+        
+        return (x_sum / count, y_sum / count)
+    
+    def is_stable(self, track_id):
+        """Check if a track is stable based on its center positions"""
+        if track_id not in self.track_centers:
+            return False
+            
+        centers = self.track_centers[track_id]
+        if len(centers) < TOURNIQUET_STABILITY_FRAMES:
+            return False
+        
+        # Calculate average center position
+        avg_center = self.calculate_average_center(centers)
+        if not avg_center:
+            return False
+        
+        # Count how many centers are within the threshold distance of the average
+        stable_count = 0
+        for center in centers:
+            if self.calculate_distance(center, avg_center) <= TOURNIQUET_STABILITY_THRESHOLD:
+                stable_count += 1
+        
+        # Calculate the percentage of stable frames
+        stability_percentage = stable_count / len(centers)
+        
+        # Log stability information for debugging
+        logging.debug(
+            f"Track {track_id} stability check:\n"
+            f"  Total frames: {len(centers)}\n"
+            f"  Stable frames: {stable_count}\n"
+            f"  Stability percentage: {stability_percentage:.2%}\n"
+            f"  Average center: {avg_center}\n"
+            f"  Max deviation: {max(self.calculate_distance(c, avg_center) for c in centers):.2f}px"
+        )
+        
+        return stability_percentage >= TOURNIQUET_STABILITY_PERCENTAGE
+    
+    def update_model_detections(self, message):
+        """Update the model detections text area with a message"""
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        # Extract just the first line for GUI display (removes position, confidence, and bbox info)
+        gui_message = message.split('\n')[0]
+        formatted_message = f"{timestamp} {gui_message}\n"
+        
+        # Update the text area in the main thread
+        self.app.root.after(0, lambda: self._update_text_area(formatted_message))
+        
+        # Log full detailed message to file
+        logging.info(message)
+    
+    def _update_text_area(self, message):
+        """Helper method to update the text area (must be called from main thread)"""
+        try:
+            self.app.text_area2.config(state='normal')
+            self.app.text_area2.insert(tk.END, message)
+            self.app.text_area2.see(tk.END)  # Scroll to the end
+            self.app.text_area2.config(state='disabled')
+        except Exception as e:
+            logging.error(f"Error updating text area: {e}")
+    
+    def log_track_info(self, track_id, center, stability_count):
+        """Log detailed information about a track for debugging"""
+        if track_id not in self.track_centers:
+            return
+            
+        centers = self.track_centers[track_id]
+        if not centers:
+            return
+            
+        avg_center = self.calculate_average_center(centers)
+        if not avg_center:
+            return
+            
+        # Calculate max deviation from average
+        max_deviation = 0
+        deviations = []
+        for c in centers:
+            dist = self.calculate_distance(c, avg_center)
+            max_deviation = max(max_deviation, dist)
+            deviations.append(dist)
+            
+        # Get the track from active_tracks
+        track = next((t for t in self.app.active_tracks if t['id'] == track_id), None)
+        if track:
+            # Calculate stability metrics
+            avg_deviation = sum(deviations) / len(deviations) if deviations else 0
+            stable_frames = sum(1 for d in deviations if d <= TOURNIQUET_STABILITY_THRESHOLD)
+            stability_percentage = stable_frames / len(deviations) if deviations else 0
+            
+            # Log detailed information including bbox and confidence
+            logging.debug(
+                f"Track {track_id} Details:\n"
+                f"  Current Center: {center}\n"
+                f"  Average Center: {avg_center}\n"
+                f"  Current Deviation: {self.calculate_distance(center, avg_center):.2f}px\n"
+                f"  Average Deviation: {avg_deviation:.2f}px\n"
+                f"  Max Deviation: {max_deviation:.2f}px\n"
+                f"  Stability Count: {stability_count}\n"
+                f"  Stable Frames: {stable_frames}/{len(deviations)} ({stability_percentage:.1%})\n"
+                f"  Centers Count: {len(centers)}\n"
+                f"  Bounding Box: {track['bbox']}\n"
+                f"  Confidence: {track['confidence']:.3f}\n"
+                f"  Age: {track['age']}\n"
+                f"  Class ID: {track['class_id']}\n"
+                f"  Last Seen: {self.track_last_seen.get(track_id, 'Never')}\n"
+                f"  History Length: {len(self.track_history.get(track_id, []))}\n"
+                f"  Time since last update: {time.time() - self.track_last_seen.get(track_id, time.time()):.2f}s"
+            )
+    
+    def run(self):
+        """Main observer loop that runs in a background thread"""
+        frame_count = 0
+        last_log_time = time.time()
+        
+        while not self.stop_event.is_set():
+            try:
+                # Get a copy of the active tracks to avoid race conditions
+                active_tracks = self.app.active_tracks.copy()
+                current_time = time.time()
+                
+                # Process each track
+                for track in active_tracks:
+                    track_id = track['id']
+                    
+                    # Skip tracks that have already been marked as applied
+                    if track_id in self.applied_tracks:
+                        continue
+                    
+                    # Initialize track data if not already present
+                    if track_id not in self.track_centers:
+                        self.track_centers[track_id] = deque(maxlen=TOURNIQUET_STABILITY_FRAMES)
+                        self.track_stability[track_id] = 0
+                        self.track_last_seen[track_id] = current_time
+                        self.track_history[track_id] = []
+                        logging.info(f"New track detected: {track_id} with bbox {track['bbox']} and confidence {track['confidence']:.3f}")
+                    
+                    # Calculate center of current bounding box
+                    center = self.calculate_center(track['bbox'])
+                    
+                    # Add center to track history
+                    self.track_centers[track_id].append(center)
+                    self.track_history[track_id].append((center, current_time))
+                    self.track_last_seen[track_id] = current_time
+                    
+                    # Log track info periodically
+                    self.log_track_info(track_id, center, self.track_stability[track_id])
+                    
+                    # Check if track is stable
+                    if self.is_stable(track_id):
+                        # Mark track as applied
+                        self.applied_tracks.add(track_id)
+                        
+                        # Log the event with detailed information
+                        self.update_model_detections(
+                            f"Tourniquet {track_id} has been APPLIED\n"
+                            f"  Final Position: {center}\n"
+                            f"  Confidence: {track['confidence']:.3f}\n"
+                            f"  Bounding Box: {track['bbox']}"
+                        )
+                        logging.info(
+                            f"Tourniquet {track_id} has been APPLIED\n"
+                            f"  Final Position: {center}\n"
+                            f"  Confidence: {track['confidence']:.3f}\n"
+                            f"  Bounding Box: {track['bbox']}"
+                        )
+                
+                # Check for temporarily lost tracks
+                for track_id in list(self.track_centers.keys()):
+                    if track_id not in {t['id'] for t in active_tracks}:
+                        # Track is not in current active tracks
+                        last_seen = self.track_last_seen.get(track_id, 0)
+                        time_since_last_seen = current_time - last_seen
+                        
+                        if time_since_last_seen < 2.0:  # Within 2 seconds
+                            # Get last known position
+                            if track_id in self.track_history and self.track_history[track_id]:
+                                last_center, _ = self.track_history[track_id][-1]
+                                
+                                # Check if any current track is close to the last known position
+                                for track in active_tracks:
+                                    current_center = self.calculate_center(track['bbox'])
+                                    if self.calculate_distance(current_center, last_center) <= TOURNIQUET_STABILITY_THRESHOLD:
+                                        # Found a matching track, preserve the original track ID and history
+                                        if track['id'] != track_id:  # Only update if it's a different ID
+                                            # Update the track's ID to match the original
+                                            track['id'] = track_id
+                                            logging.info(f"Track {track['id']} matched to existing track {track_id}")
+                                        break
+                
+                # Clean up tracks that are no longer active and haven't been seen for a while
+                active_track_ids = {track['id'] for track in active_tracks}
+                for track_id in list(self.track_centers.keys()):
+                    if track_id not in active_track_ids:
+                        last_seen = self.track_last_seen.get(track_id, 0)
+                        if current_time - last_seen > 5.0:  # Remove after 5 seconds of no detection
+                            del self.track_centers[track_id]
+                            if track_id in self.track_stability:
+                                del self.track_stability[track_id]
+                            if track_id in self.track_last_seen:
+                                del self.track_last_seen[track_id]
+                            if track_id in self.track_history:
+                                del self.track_history[track_id]
+                            logging.info(f"Track {track_id} removed (no longer active)")
+                
+                # Increment frame counter
+                frame_count += 1
+                
+                # Log summary statistics periodically (every 5 seconds)
+                if current_time - last_log_time > 5.0:
+                    logging.info(
+                        f"Observer stats:\n"
+                        f"  Active tracks: {len(active_tracks)}\n"
+                        f"  Applied tourniquets: {len(self.applied_tracks)}\n"
+                        f"  Frames processed: {frame_count}\n"
+                        f"  Track details:"
+                    )
+                    for track in active_tracks:
+                        logging.info(
+                            f"    Track {track['id']}:\n"
+                            f"      Position: {self.calculate_center(track['bbox'])}\n"
+                            f"      Confidence: {track['confidence']:.3f}\n"
+                            f"      Age: {track['age']}\n"
+                            f"      Last Seen: {self.track_last_seen.get(track['id'], 'Never')}"
+                        )
+                    last_log_time = current_time
+                
+                # Sleep to avoid consuming too much CPU
+                time.sleep(0.1)
+                
+            except Exception as e:
+                logging.error(f"Error in tourniquet observer: {e}")
+                import traceback
+                logging.error(traceback.format_exc())
+                time.sleep(0.5)  # Sleep longer on error
 
 class App:
     def __init__(self, root):
@@ -156,6 +511,9 @@ class App:
         self.capture_thread = None
         self.pipeline_thread = None
         self.pipeline_running = False
+        
+        # Initialize tourniquet observer
+        self.tourniquet_observer = None
 
         # On app close, release resources
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
@@ -293,6 +651,9 @@ class App:
         # Convert detections to numpy array for efficient processing
         detections = np.array(detections)
         
+        # Initialize assigned_detections set outside the conditional block
+        assigned_detections = set()
+        
         # Initialize cost matrix for tracking
         if self.active_tracks:
             cost_matrix = np.zeros((len(self.active_tracks), len(detections)))
@@ -322,15 +683,15 @@ class App:
                     if len(track['history']) > TRACKING_HISTORY:
                         track['history'].popleft()
                     
-                    # Remove assigned detection
-                    detections = np.delete(detections, j, axis=0)
+                    # Mark this detection as assigned
+                    assigned_detections.add(j)
             
             # Remove tracks that haven't been updated
             self.active_tracks = [t for t in self.active_tracks if t['age'] <= MAX_TRACK_GAP]
         
         # Create new tracks for unassigned detections
-        for det in detections:
-            if len(det) >= 6:  # Ensure det has all required elements
+        for i, det in enumerate(detections):
+            if i not in assigned_detections and len(det) >= 6:  # Ensure det has all required elements
                 new_track = {
                     'id': self.track_counter,
                     'bbox': det[:4],
@@ -408,6 +769,9 @@ class App:
 
     def process_frames(self):
         """Process frames through YOLO models and annotate them"""
+        frame_count = 0
+        last_log_time = time.time()
+        
         while not self.stop_event.is_set():
             try:
                 # Collect frames to form a batch
@@ -431,109 +795,119 @@ class App:
                 pose_results = [None] * len(batch_frames)
 
                 def detection_worker():
-                    # Get motion regions and features for the first frame
-                    motion_boxes = None
-                    feature_matches = None
-                    
-                    if self.last_frame is not None:
-                        # Preprocess frames
-                        current_frame = self.preprocess_frame(batch_for_detection[0])
-                        last_frame = self.preprocess_frame(self.last_frame)
+                    try:
+                        # Get motion regions and features for the first frame
+                        motion_boxes = None
+                        feature_matches = None
                         
-                        # Detect motion
-                        motion_boxes = self.detect_motion(current_frame, last_frame)
-                        
-                        # Detect and match features
-                        self.current_gray = cv2.cvtColor(current_frame, cv2.COLOR_BGR2GRAY)
-                        self.last_gray = cv2.cvtColor(last_frame, cv2.COLOR_BGR2GRAY)
-                        feature_matches = self.match_features(
-                            self.detect_features(current_frame),
-                            self.last_keypoints
-                        )
-                    
-                    # Multi-scale detection
-                    all_detections = []
-                    for scale, weight in zip(SCALE_FACTORS, SCALE_CONFIDENCE_WEIGHTS):
-                        # Resize frame
-                        scaled_frame = cv2.resize(batch_for_detection[0], 
-                                                (int(FRAME_WIDTH * scale), 
-                                                 int(FRAME_HEIGHT * scale)))
-                        
-                        # Run detection
-                        results = self.object_model(
-                            scaled_frame,
-                            conf=DETECTION_CONFIDENCE,
-                            iou=0.45,
-                            agnostic_nms=True
-                        )
-                        
-                        # Scale detections back to original size
-                        for result in results:
-                            for box in result.boxes.data:
-                                x1, y1, x2, y2, conf, cls_id = box.tolist()
-                                # Scale coordinates back
-                                x1, y1 = x1/scale, y1/scale
-                                x2, y2 = x2/scale, y2/scale
-                                # Apply scale weight to confidence
-                                conf = conf * weight
-                                all_detections.append((x1, y1, x2, y2, conf, int(cls_id)))
-                    
-                    # Filter and process detections
-                    boxes = []
-                    for det in all_detections:
-                        if len(det) >= 6:  # Ensure det has all required elements
-                            x1, y1, x2, y2, conf, cls_id = det
+                        if self.last_frame is not None:
+                            # Preprocess frames
+                            current_frame = self.preprocess_frame(batch_for_detection[0])
+                            last_frame = self.preprocess_frame(self.last_frame)
                             
-                            # Calculate box area
-                            box_area = (x2 - x1) * (y2 - y1)
+                            # Detect motion
+                            motion_boxes = self.detect_motion(current_frame, last_frame)
                             
-                            # Filter based on size
-                            if MIN_BOX_AREA <= box_area <= MAX_BOX_AREA:
-                                # Boost confidence if box overlaps with motion region
-                                if motion_boxes:
-                                    for motion_box in motion_boxes:
-                                        iou = self.calculate_iou((x1, y1, x2, y2), motion_box)
-                                        if iou > 0.1:
-                                            conf = min(conf * MOTION_CONFIDENCE_BOOST, 1.0)
-                                
-                                # Boost confidence if box contains feature matches
-                                if feature_matches:
-                                    good_old, good_new = feature_matches
-                                    box_center = ((x1 + x2) / 2, (y1 + y2) / 2)
-                                    box_size = max(x2 - x1, y2 - y1)
-                                    
-                                    # Count features inside box
-                                    features_in_box = 0
-                                    for pt in good_new:
-                                        if (x1 <= pt[0] <= x2 and y1 <= pt[1] <= y2):
-                                            features_in_box += 1
-                                    
-                                    if features_in_box > 0:
-                                        conf = min(conf * (1 + features_in_box/10), 1.0)
-                                
-                                boxes.append((x1, y1, x2, y2, conf, int(cls_id)))
-                    
-                    detection_results[0] = boxes
-                    
-                    # Update detection history and tracking
-                    if len(batch_frames) > 0:
-                        self.detection_history.append(boxes)
-                        self.last_frame = batch_for_detection[0].copy()
-                        self.last_keypoints = self.detect_features(batch_for_detection[0])
+                            # Detect and match features
+                            self.current_gray = cv2.cvtColor(current_frame, cv2.COLOR_BGR2GRAY)
+                            self.last_gray = cv2.cvtColor(last_frame, cv2.COLOR_BGR2GRAY)
+                            feature_matches = self.match_features(
+                                self.detect_features(current_frame),
+                                self.last_keypoints
+                            )
                         
-                        # Update tracks with new detections
-                        if boxes:  # Only update tracks if we have detections
-                            self.update_tracks(boxes, batch_for_detection[0])
-                            self.predict_track_positions()
+                        # Multi-scale detection
+                        all_detections = []
+                        for scale, weight in zip(SCALE_FACTORS, SCALE_CONFIDENCE_WEIGHTS):
+                            # Resize frame
+                            scaled_frame = cv2.resize(batch_for_detection[0], 
+                                                    (int(FRAME_WIDTH * scale), 
+                                                     int(FRAME_HEIGHT * scale)))
+                            
+                            # Run detection
+                            results = self.object_model(
+                                scaled_frame,
+                                conf=DETECTION_CONFIDENCE,
+                                iou=0.45,
+                                agnostic_nms=True
+                            )
+                            
+                            # Scale detections back to original size
+                            for result in results:
+                                for box in result.boxes.data:
+                                    x1, y1, x2, y2, conf, cls_id = box.tolist()
+                                    # Scale coordinates back
+                                    x1, y1 = x1/scale, y1/scale
+                                    x2, y2 = x2/scale, y2/scale
+                                    # Apply scale weight to confidence
+                                    conf = conf * weight
+                                    all_detections.append((x1, y1, x2, y2, conf, int(cls_id)))
+                        
+                        # Filter and process detections
+                        boxes = []
+                        for det in all_detections:
+                            if len(det) >= 6:  # Ensure det has all required elements
+                                x1, y1, x2, y2, conf, cls_id = det
+                                
+                                # Calculate box area
+                                box_area = (x2 - x1) * (y2 - y1)
+                                
+                                # Filter based on size
+                                if MIN_BOX_AREA <= box_area <= MAX_BOX_AREA:
+                                    # Boost confidence if box overlaps with motion region
+                                    if motion_boxes:
+                                        for motion_box in motion_boxes:
+                                            iou = self.calculate_iou((x1, y1, x2, y2), motion_box)
+                                            if iou > 0.1:
+                                                conf = min(conf * MOTION_CONFIDENCE_BOOST, 1.0)
+                                    
+                                    # Boost confidence if box contains feature matches
+                                    if feature_matches:
+                                        good_old, good_new = feature_matches
+                                        box_center = ((x1 + x2) / 2, (y1 + y2) / 2)
+                                        box_size = max(x2 - x1, y2 - y1)
+                                        
+                                        # Count features inside box
+                                        features_in_box = 0
+                                        for pt in good_new:
+                                            if (x1 <= pt[0] <= x2 and y1 <= pt[1] <= y2):
+                                                features_in_box += 1
+                                        
+                                        if features_in_box > 0:
+                                            conf = min(conf * (1 + features_in_box/10), 1.0)
+                                    
+                                    boxes.append((x1, y1, x2, y2, conf, int(cls_id)))
+                        
+                        detection_results[0] = boxes
+                        
+                        # Update detection history and tracking
+                        if len(batch_frames) > 0:
+                            self.detection_history.append(boxes)
+                            self.last_frame = batch_for_detection[0].copy()
+                            self.last_keypoints = self.detect_features(batch_for_detection[0])
+                            
+                            # Update tracks with new detections
+                            if boxes:  # Only update tracks if we have detections
+                                self.update_tracks(boxes, batch_for_detection[0])
+                                self.predict_track_positions()
+                    except Exception as e:
+                        print(f"[Detection Worker] Error: {e}")
+                        import traceback
+                        traceback.print_exc()
 
                 def pose_worker():
-                    results = self.pose_model(batch_for_pose)
-                    for i, result in enumerate(results):
-                        if result.keypoints is not None:
-                            keypoints = result.keypoints.data[0].tolist()
-                            pose_results[i] = [(x, y, conf) for x, y, conf in keypoints]
-                        else:
-                            pose_results[i] = []
+                    try:
+                        results = self.pose_model(batch_for_pose)
+                        for i, result in enumerate(results):
+                            if result.keypoints is not None:
+                                keypoints = result.keypoints.data[0].tolist()
+                                pose_results[i] = [(x, y, conf) for x, y, conf in keypoints]
+                            else:
+                                pose_results[i] = []
+                    except Exception as e:
+                        print(f"[Pose Worker] Error: {e}")
+                        import traceback
+                        traceback.print_exc()
 
                 # Create and run threads
                 t_detect = threading.Thread(target=detection_worker)
@@ -566,9 +940,21 @@ class App:
                     )
                     self.processed_queue.put(frame_anno)
                     self.last_valid_frame = frame_anno.copy()
+                
+                # Increment frame counter
+                frame_count += 1
+                
+                # Log summary statistics periodically (every 5 seconds)
+                current_time = time.time()
+                if current_time - last_log_time > 5.0:
+                    print(f"[Pipeline] Stats: {len(self.active_tracks)} active tracks, "
+                          f"{frame_count} frames processed")
+                    last_log_time = current_time
 
             except Exception as e:
-                print("[Pipeline] Exception:", e)
+                print(f"[Pipeline] Exception: {e}")
+                import traceback
+                traceback.print_exc()
                 time.sleep(0.1)
 
     def annotate_frame(self, frame, detections, keypoints):
@@ -762,6 +1148,9 @@ class App:
         self.pipeline_thread = threading.Thread(target=self.process_frames, daemon=True)
         self.pipeline_thread.start()
         
+        # Start tourniquet observer
+        self.tourniquet_observer = TourniquetObserver(self, self.stop_event)
+        
         print("Starting video pipeline...")
 
     def stop_pipeline(self):
@@ -777,6 +1166,16 @@ class App:
         
         # Reset to blank frame
         self.last_valid_frame = self.blank_frame.copy()
+        
+        # Log final message before shutdown
+        logging.info(
+            "Pipeline shutdown initiated\n"
+            f"Final stats:\n"
+            f"  Active tracks: {len(self.active_tracks)}\n"
+            f"  Applied tourniquets: {len(self.tourniquet_observer.applied_tracks) if self.tourniquet_observer else 0}\n"
+            f"  Debug log location: {os.path.join(DEBUG_LOG_DIR, 'debug.log')}\n"
+            "Logging will continue to append to debug.log until application exit"
+        )
         
         print("Stopping video pipeline...")
 
