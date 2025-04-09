@@ -1,3 +1,23 @@
+"""
+Tourniquet Detection and Tracking System
+
+This application provides a real-time computer vision system for detecting and tracking
+tourniquets in video feeds. It uses YOLO object detection models to identify tourniquets
+and implements a tracking system to monitor their stability. The system is designed to
+detect when a tourniquet has been properly applied based on position stability.
+
+Key features:
+- Real-time video processing from Intel RealSense cameras
+- Multi-scale object detection using YOLO models
+- Feature tracking and motion detection for improved reliability
+- Tourniquet stability monitoring to detect proper application
+- GUI interface with live video feed and detection information
+- Debug logging and video recording capabilities
+
+The system is designed for medical training and assistance scenarios where
+proper tourniquet application is critical.
+"""
+
 import cv2
 import tkinter as tk
 from tkinter import Text, Label, Button, Frame
@@ -19,6 +39,7 @@ from logging.handlers import RotatingFileHandler
 import math
 import sys
 
+# Suppress warnings to reduce console clutter
 warnings.filterwarnings("ignore", category=UserWarning)
 warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", category=DeprecationWarning)
@@ -28,7 +49,7 @@ warnings.filterwarnings("ignore", category=RuntimeWarning)
 # Configuration
 # ==============================================
 BATCH_SIZE = 4           
-FRAME_WIDTH, FRAME_HEIGHT = 640, 640  # Changed to match YOLO input size
+FRAME_WIDTH, FRAME_HEIGHT = 640, 640  # YOLO input size
 OUTPUT_FPS = 30          
 OUTPUT_DIR = "output"  # Directory to save output files
 DISPLAY_BUFFER_SIZE = 5  # Number of frames to keep in display buffer
@@ -36,16 +57,16 @@ RECORDING_BUFFER_SIZE = 1000  # Number of frames to keep in recording buffer
 SAVE_DEBUG_VIDEO = True  # Flag to enable/disable debug video saving
 
 # Detection parameters
-DETECTION_CONFIDENCE = 0.01  # Even lower confidence threshold
-MIN_BOX_AREA = 300  # Lower minimum area
-MAX_BOX_AREA = 200000  # Increased maximum area
-TEMPORAL_SMOOTHING = 5  # Reduced for faster response to lost detections
-MOTION_THRESHOLD = 15  # Lower threshold for motion detection
-TRACKING_HISTORY = 10  # Reduced tracking history
-TRACKING_IOU_THRESHOLD = 0.3  # Increased threshold for tracking association
-MOTION_CONFIDENCE_BOOST = 2.0  # Reduced confidence boost for motion
-MIN_TRACK_LENGTH = 2  # Lower minimum track length
-MAX_TRACK_GAP = 3  # Reduced maximum gap between detections
+DETECTION_CONFIDENCE = 0.01  # Confidence threshold for object detection
+MIN_BOX_AREA = 300  # Minimum area for detected objects
+MAX_BOX_AREA = 200000  # Maximum area for detected objects
+TEMPORAL_SMOOTHING = 5  # Number of frames for temporal smoothing
+MOTION_THRESHOLD = 15  # Threshold for motion detection
+TRACKING_HISTORY = 10  # Number of frames to keep in tracking history
+TRACKING_IOU_THRESHOLD = 0.3  # IoU threshold for tracking association
+MOTION_CONFIDENCE_BOOST = 2.0  # Confidence boost for motion regions
+MIN_TRACK_LENGTH = 2  # Minimum track length for stability
+MAX_TRACK_GAP = 3  # Maximum gap between detections
 MAX_TRACK_AGE = 5  # Maximum age of a track without updates
 MIN_TRACK_CONFIDENCE = 0.2  # Minimum confidence to maintain a track
 
@@ -86,10 +107,21 @@ if not os.path.exists(DEBUG_LOG_DIR):
 class TourniquetObserver:
     """
     Observer class that monitors tourniquet tracks to detect when they've been applied.
+    
     A tourniquet is considered "applied" when its center position remains stable
     (within TOURNIQUET_STABILITY_THRESHOLD pixels) for TOURNIQUET_STABILITY_FRAMES consecutive frames.
+    
+    This class runs in a separate thread and continuously monitors the active tracks
+    to detect when a tourniquet has been properly applied based on position stability.
     """
     def __init__(self, app, observer_stop_event):
+        """
+        Initialize the TourniquetObserver.
+        
+        Args:
+            app: The main application instance
+            observer_stop_event: Threading event to signal when to stop the observer
+        """
         self.app = app
         self.observer_stop_event = observer_stop_event
         self.track_centers = {}  # Dictionary to store center positions for each track
@@ -106,7 +138,12 @@ class TourniquetObserver:
         self.observer_thread.start()
     
     def setup_logging(self):
-        """Setup logging to a rotating file with enhanced debugging information"""
+        """
+        Setup logging to a rotating file with enhanced debugging information.
+        
+        Configures both file and console handlers with custom formatting to provide
+        detailed logging information for debugging and monitoring.
+        """
         log_file = os.path.join(DEBUG_LOG_DIR, "debug.log")
         
         try:
@@ -143,7 +180,7 @@ class TourniquetObserver:
             logger.addHandler(file_handler)
             logger.addHandler(console_handler)
             
-            # Test write to the log file
+            # Log initialization information
             logging.info(
                 "Tourniquet Observer initialized with enhanced logging\n"
                 f"Debug log file: {log_file}\n"
@@ -170,16 +207,41 @@ class TourniquetObserver:
             print(traceback.format_exc())
     
     def calculate_center(self, bbox):
-        """Calculate the center point of a bounding box"""
+        """
+        Calculate the center point of a bounding box.
+        
+        Args:
+            bbox: Bounding box coordinates (x1, y1, x2, y2)
+            
+        Returns:
+            tuple: (x, y) coordinates of the center point
+        """
         x1, y1, x2, y2 = bbox
         return ((x1 + x2) / 2, (y1 + y2) / 2)
     
     def calculate_distance(self, point1, point2):
-        """Calculate Euclidean distance between two points"""
+        """
+        Calculate Euclidean distance between two points.
+        
+        Args:
+            point1: First point (x1, y1)
+            point2: Second point (x2, y2)
+            
+        Returns:
+            float: Euclidean distance between the points
+        """
         return math.sqrt((point1[0] - point2[0])**2 + (point1[1] - point2[1])**2)
     
     def calculate_average_center(self, centers):
-        """Calculate the average center position from a list of centers"""
+        """
+        Calculate the average center position from a list of centers.
+        
+        Args:
+            centers: List of (x, y) center points
+            
+        Returns:
+            tuple: Average (x, y) center position or None if list is empty
+        """
         if not centers:
             return None
         
@@ -190,7 +252,19 @@ class TourniquetObserver:
         return (x_sum / count, y_sum / count)
     
     def is_stable(self, track_id):
-        """Check if a track is stable based on its center positions"""
+        """
+        Check if a track is stable based on its center positions.
+        
+        A track is considered stable if its center position remains within
+        TOURNIQUET_STABILITY_THRESHOLD pixels of the average center for at least
+        TOURNIQUET_STABILITY_PERCENTAGE of the frames in the history.
+        
+        Args:
+            track_id: ID of the track to check
+            
+        Returns:
+            bool: True if the track is stable, False otherwise
+        """
         if track_id not in self.track_centers:
             return False
             
@@ -428,7 +502,20 @@ class TourniquetObserver:
                 time.sleep(0.5)  # Sleep longer on error
 
 class App:
+    """
+    Main application class for the Tourniquet Detection and Tracking System.
+    
+    This class manages the GUI interface, video pipeline, and interaction between
+    different components of the system. It handles camera input, object detection,
+    tracking, and visualization of results in real-time.
+    """
     def __init__(self, root):
+        """
+        Initialize the application.
+        
+        Args:
+            root: The Tkinter root window
+        """
         self.root = root
         self.root.title("CSC-490 Live Demo")
 
@@ -468,51 +555,9 @@ class App:
         if not os.path.exists(OUTPUT_DIR):
             os.makedirs(OUTPUT_DIR)
 
-        # -----------------------------
-        # 1) SETUP MAIN GUI COMPONENTS
-        # -----------------------------
-        self.main_frame = Frame(root, bg="#b0bec5", padx=10, pady=10)
-        self.main_frame.pack(fill=tk.BOTH, expand=True)
-
-        # Configure grid weights to allow resizing
-        self.main_frame.grid_columnconfigure(0, weight=3)  # Video column
-        self.main_frame.grid_columnconfigure(1, weight=2)  # Text column
-        self.main_frame.grid_rowconfigure(0, weight=1)
-
-        # Webcam feed
-        self.video_label = Label(self.main_frame, bg="white")
-        self.video_label.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
-
-        # Right panel
-        self.right_panel = Frame(self.main_frame, bg="#b0bec5")
-        self.right_panel.grid(row=0, column=1, padx=10, pady=10, sticky="nsew")
-        self.right_panel.grid_columnconfigure(0, weight=1)
-
-        # Text area for live transcript
-        self.label1 = Label(self.right_panel, text="Live Transcript", font=("Arial", 12, "bold"), bg="white")
-        self.label1.pack(fill=tk.X, pady=(0, 5))
-        self.text_area1 = Text(self.right_panel, state='disabled')
-        self.text_area1.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
-
-        # Text area for any other detections (optional)
-        self.label2 = Label(self.right_panel, text="Model Detections", font=("Arial", 12, "bold"), bg="white")
-        self.label2.pack(fill=tk.X, pady=(0, 5))
-        self.text_area2 = Text(self.right_panel, state='disabled')
-        self.text_area2.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
-
-        # Button panel
-        self.button_panel = Frame(self.main_frame, bg="#b0bec5")
-        self.button_panel.grid(row=1, column=1, pady=10, sticky="e")
-
-        # Initially the button says "Start Demo"
-        self.start_button = Button(self.button_panel, text="Start Demo", bg="#7749F8", fg="white",
-                                   command=self.toggle_transcription)
-        self.start_button.pack(side=tk.LEFT, padx=5)
-
-        self.export_button = Button(self.button_panel, text="Export Data", bg="#7749F8", fg="white",
-                                  command=self.export_data)
-        self.export_button.pack(side=tk.LEFT, padx=5)
-
+        # Setup main GUI components
+        self.setup_gui()
+        
         # Initialize pipeline threads
         self.capture_thread = None
         self.pipeline_thread = None
@@ -537,9 +582,65 @@ class App:
 
         # Start the video update loop immediately
         self.update_video()
+        
+    def setup_gui(self):
+        """
+        Setup the graphical user interface components.
+        
+        Creates and arranges all GUI elements including the main frame,
+        video display, text areas, and control buttons.
+        """
+        # Main frame
+        self.main_frame = Frame(self.root, bg="#b0bec5", padx=10, pady=10)
+        self.main_frame.pack(fill=tk.BOTH, expand=True)
+
+        # Configure grid weights to allow resizing
+        self.main_frame.grid_columnconfigure(0, weight=3)  # Video column
+        self.main_frame.grid_columnconfigure(1, weight=2)  # Text column
+        self.main_frame.grid_rowconfigure(0, weight=1)
+
+        # Webcam feed
+        self.video_label = Label(self.main_frame, bg="white")
+        self.video_label.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
+
+        # Right panel
+        self.right_panel = Frame(self.main_frame, bg="#b0bec5")
+        self.right_panel.grid(row=0, column=1, padx=10, pady=10, sticky="nsew")
+        self.right_panel.grid_columnconfigure(0, weight=1)
+
+        # Text area for live transcript
+        self.label1 = Label(self.right_panel, text="Live Transcript", font=("Arial", 12, "bold"), bg="white")
+        self.label1.pack(fill=tk.X, pady=(0, 5))
+        self.text_area1 = Text(self.right_panel, state='disabled')
+        self.text_area1.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+
+        # Text area for model detections
+        self.label2 = Label(self.right_panel, text="Model Detections", font=("Arial", 12, "bold"), bg="white")
+        self.label2.pack(fill=tk.X, pady=(0, 5))
+        self.text_area2 = Text(self.right_panel, state='disabled')
+        self.text_area2.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+
+        # Button panel
+        self.button_panel = Frame(self.main_frame, bg="#b0bec5")
+        self.button_panel.grid(row=1, column=1, pady=10, sticky="e")
+
+        # Control buttons
+        self.start_button = Button(self.button_panel, text="Start Demo", bg="#7749F8", fg="white",
+                                   command=self.toggle_transcription)
+        self.start_button.pack(side=tk.LEFT, padx=5)
+
+        self.export_button = Button(self.button_panel, text="Export Data", bg="#7749F8", fg="white",
+                                  command=self.export_data)
+        self.export_button.pack(side=tk.LEFT, padx=5)
 
     def capture_frames(self):
-        """Continuously capture frames from the RealSense camera"""
+        """
+        Continuously capture frames from the RealSense camera.
+        
+        This method runs in a separate thread and captures frames from the camera,
+        resizes them to match the YOLO input size, and adds them to the frame queue
+        for processing.
+        """
         pipeline = rs.pipeline()
         config = rs.config()
         config.enable_stream(rs.stream.color, RS_WIDTH, RS_HEIGHT, rs.format.bgr8, RS_FPS)
@@ -591,7 +692,16 @@ class App:
                 print(f"[Capture] Error stopping pipeline: {e}")
 
     def detect_motion(self, current_frame, last_frame):
-        """Detect motion between frames to help identify regions of interest"""
+        """
+        Detect motion between frames to help identify regions of interest.
+        
+        Args:
+            current_frame: The current video frame
+            last_frame: The previous video frame
+            
+        Returns:
+            list: List of bounding boxes (x1, y1, x2, y2) where motion was detected
+        """
         if last_frame is None:
             return None
             
@@ -617,7 +727,16 @@ class App:
         return motion_boxes
 
     def calculate_iou(self, box1, box2):
-        """Calculate Intersection over Union between two bounding boxes"""
+        """
+        Calculate Intersection over Union between two bounding boxes.
+        
+        Args:
+            box1: First bounding box (x1, y1, x2, y2)
+            box2: Second bounding box (x1, y1, x2, y2)
+            
+        Returns:
+            float: IoU value between 0 and 1
+        """
         x1 = max(box1[0], box2[0])
         y1 = max(box1[1], box2[1])
         x2 = min(box1[2], box2[2])
@@ -633,11 +752,21 @@ class App:
         return intersection / float(box1_area + box2_area - intersection)
 
     def update_tracks(self, detections, frame):
-        """Update tracking information for detected objects"""
+        """
+        Update tracking information for detected objects.
+        
+        This method matches new detections to existing tracks using the Hungarian algorithm
+        based on IoU (Intersection over Union) between bounding boxes. It also creates
+        new tracks for unassigned detections and removes old or low confidence tracks.
+        
+        Args:
+            detections: List of detections, each containing (x1, y1, x2, y2, confidence, class_id)
+            frame: Current video frame
+        """
         # Age all existing tracks
         for track in self.active_tracks:
             track['age'] += 1
-            # Reduce confidence over time more aggressively
+            # Reduce confidence over time
             track['confidence'] *= 0.8  # Decay confidence by 20% per frame
         
         # Remove old or low confidence tracks
@@ -711,7 +840,13 @@ class App:
                 self.track_counter += 1
 
     def predict_track_positions(self):
-        """Predict next positions of tracks using simple motion model"""
+        """
+        Predict next positions of tracks using simple motion model.
+        
+        This method uses the last two positions of each track to calculate velocity
+        and predict the next position. This helps maintain tracking when detections
+        are temporarily lost.
+        """
         for track in self.active_tracks:
             if len(track['history']) >= 2:
                 # Calculate velocity from last two positions
@@ -724,7 +859,18 @@ class App:
                 track['predicted_bbox'] = predicted_pos.tolist()
 
     def preprocess_frame(self, frame):
-        """Apply preprocessing to enhance features"""
+        """
+        Apply preprocessing to enhance features in the frame.
+        
+        This method applies various image processing techniques to improve
+        feature detection and tracking.
+        
+        Args:
+            frame: Input video frame
+            
+        Returns:
+            numpy.ndarray: Preprocessed frame
+        """
         # Convert to grayscale
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         
@@ -739,7 +885,18 @@ class App:
         return cv2.cvtColor(filtered, cv2.COLOR_GRAY2BGR)
 
     def detect_features(self, frame):
-        """Detect and track features in the frame"""
+        """
+        Detect and track features in the frame.
+        
+        This method uses the FastFeatureDetector to find keypoints in the frame
+        that can be tracked across frames.
+        
+        Args:
+            frame: Input video frame
+            
+        Returns:
+            numpy.ndarray: Array of keypoint coordinates
+        """
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         
         # Detect keypoints
@@ -751,7 +908,19 @@ class App:
         return keypoints
 
     def match_features(self, current_keypoints, last_keypoints):
-        """Match features between frames"""
+        """
+        Match features between frames.
+        
+        This method uses optical flow to track keypoints from the previous frame
+        to the current frame.
+        
+        Args:
+            current_keypoints: Keypoints detected in the current frame
+            last_keypoints: Keypoints detected in the previous frame
+            
+        Returns:
+            tuple: (good_old, good_new) - Matched keypoint pairs or None if no matches
+        """
         if last_keypoints is None or len(last_keypoints) == 0:
             return None
             
@@ -774,7 +943,13 @@ class App:
         return good_old, good_new
 
     def process_frames(self):
-        """Process frames through YOLO models and annotate them"""
+        """
+        Process frames through YOLO models and annotate them.
+        
+        This method runs in a separate thread and processes frames from the frame queue.
+        It applies object detection, pose estimation, and tracking to each frame,
+        then adds the annotated frames to the processed queue for display.
+        """
         frame_count = 0
         last_log_time = time.time()
         
@@ -964,7 +1139,20 @@ class App:
                 time.sleep(0.1)
 
     def annotate_frame(self, frame, detections, keypoints):
-        """Draw bounding boxes and keypoints on the frame"""
+        """
+        Draw bounding boxes and keypoints on the frame.
+        
+        This method visualizes the detection and tracking results on the frame,
+        including bounding boxes for detected objects, track paths, and pose keypoints.
+        
+        Args:
+            frame: Input video frame
+            detections: List of detections, each containing (x1, y1, x2, y2, confidence, class_id)
+            keypoints: List of pose keypoints, each containing (x, y, confidence)
+            
+        Returns:
+            numpy.ndarray: Annotated frame
+        """
         annotated = frame.copy()
 
         # Calculate scaling factors for coordinate conversion
@@ -1024,7 +1212,12 @@ class App:
         return annotated
 
     def start_recording(self):
-        """Start recording video"""
+        """
+        Start recording video.
+        
+        This method initializes a video writer and begins recording frames
+        from the recording buffer to a file.
+        """
         if not self.is_recording:
             # Clear recording buffer
             self.recording_buffer.clear()
@@ -1045,7 +1238,12 @@ class App:
             print(f"[Video] Started recording to {output_file}")
 
     def stop_recording(self):
-        """Stop recording video"""
+        """
+        Stop recording video.
+        
+        This method writes all frames from the recording buffer to the video file
+        and releases the video writer.
+        """
         if self.is_recording and self.video_writer:
             # Write all frames from recording buffer
             for frame in self.recording_buffer:
@@ -1057,7 +1255,12 @@ class App:
             print("[Video] Stopped recording")
 
     def export_data(self):
-        """Export data (excluding video)"""
+        """
+        Export data from the application.
+        
+        This method exports various data from the application, such as
+        detection results, tracking information, and logs.
+        """
         try:
             # TODO: Add other export functionality here (audio, transcript, etc.)
             print("[Export] Exporting data...")
@@ -1065,7 +1268,11 @@ class App:
             print(f"[Export] Error during export: {e}")
 
     def save_debug_video(self):
-        """Save debug video if enabled and frames are available"""
+        """
+        Save debug video if enabled and frames are available.
+        
+        This method saves the recording buffer to a video file for debugging purposes.
+        """
         if SAVE_DEBUG_VIDEO and self.recording_buffer:
             try:
                 # Generate timestamp for filename
@@ -1088,7 +1295,12 @@ class App:
                 print(f"[Debug] Error saving debug video: {e}")
 
     def update_video(self):
-        """Update the video display with processed frames"""
+        """
+        Update the video display with processed frames.
+        
+        This method retrieves frames from the processed queue and displays them
+        in the video label. It runs continuously to provide real-time video display.
+        """
         try:
             # Get the current size of the video label
             width = self.video_label.winfo_width()
@@ -1127,7 +1339,12 @@ class App:
         self.root.after(10, self.update_video)
 
     def start_pipeline(self):
-        """Start the video pipeline threads"""
+        """
+        Start the video pipeline threads.
+        
+        This method initializes and starts the capture and processing threads,
+        as well as the tourniquet observer.
+        """
         self.stop_event.clear()
         self.observer_stop_event.clear()
         self.pipeline_running = True
@@ -1161,7 +1378,12 @@ class App:
         print("Starting video pipeline...")
 
     def stop_pipeline(self):
-        """Stop the video pipeline threads"""
+        """
+        Stop the video pipeline threads.
+        
+        This method signals all threads to stop and waits for them to finish.
+        It also resets the display to a blank frame.
+        """
         # --- Diagnostic Logging --- >
         logging.warning(f"stop_pipeline called. Current pipeline_running state: {self.pipeline_running}") 
         import traceback 
@@ -1196,7 +1418,12 @@ class App:
         print("Stopping video pipeline...")
 
     def on_closing(self):
-        """Clean up resources when closing the application"""
+        """
+        Clean up resources when closing the application.
+        
+        This method is called when the application window is closed.
+        It stops the pipeline, saves debug video if enabled, and destroys the root window.
+        """
         if self.pipeline_running:
             self.stop_pipeline()
         
@@ -1207,6 +1434,12 @@ class App:
         self.root.destroy()
 
     def toggle_transcription(self):
+        """
+        Toggle the video pipeline on/off.
+        
+        This method is called when the start/stop button is clicked.
+        It starts or stops the video pipeline and updates the button text.
+        """
         if not self.pipeline_running:
             self.start_pipeline()
             self.start_button.config(text="Stop Demo")
