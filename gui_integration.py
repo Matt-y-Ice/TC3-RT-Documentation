@@ -456,8 +456,8 @@ class App:
         self.is_recording = False
         
         # Load YOLO models
-        self.object_model = YOLO("best.pt")
-        self.pose_model = YOLO("yolo11n-pose.pt")
+        self.object_model = YOLO("./models/yolo11n.pt")
+        self.pose_model = YOLO("./models/yolo11n-pose.pt")
         
         # Initialize feature detector
         self.feature_detector = cv2.FastFeatureDetector_create()
