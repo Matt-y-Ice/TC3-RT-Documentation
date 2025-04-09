@@ -19,3 +19,6 @@ ENV/
 .idea/
 *.swp
 *.swo 
+
+# Ignore whisper model directory
+models/whisper-small-en-finetuned/ 

@@ -15,6 +15,7 @@ from datetime import datetime
 import os
 from scipy.optimize import linear_sum_assignment
 import logging
+from logging.handlers import RotatingFileHandler
 import math
 import sys
 
@@ -116,7 +117,7 @@ class TourniquetObserver:
             )
             
             # Create a rotating file handler with size limit and backup count
-            file_handler = logging.RotatingFileHandler(
+            file_handler = RotatingFileHandler(
                 log_file,
                 maxBytes=DEBUG_LOG_MAX_SIZE,
                 backupCount=DEBUG_LOG_BACKUP_COUNT,
