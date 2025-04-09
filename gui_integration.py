@@ -13,9 +13,14 @@ Key features:
 - Tourniquet stability monitoring to detect proper application
 - GUI interface with live video feed and detection information
 - Debug logging and video recording capabilities
+- Real-time audio processing and speech transcription
+- Adaptive audio threshold for speech detection
+- Audio transcription with timestamps and duration
 
 The system is designed for medical training and assistance scenarios where
-proper tourniquet application is critical.
+proper tourniquet application is critical. The audio processing component allows
+for hands-free operation and documentation of verbal instructions or observations
+during the tourniquet application process.
 """
 
 import cv2
@@ -1040,7 +1045,11 @@ class App:
         Toggle all pipelines on/off.
         
         This method is called when the start/stop button is clicked.
-        It starts or stops all pipelines and updates the button text.
+        It manages both the video and audio pipelines:
+        - When starting: Initializes and starts both video processing and audio transcription
+        - When stopping: Gracefully shuts down both pipelines and releases resources
+        
+        The method also updates the button text to reflect the current state.
         """
         if not self.pipeline_running:
             self.start_all()
