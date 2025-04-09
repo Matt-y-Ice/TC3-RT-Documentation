@@ -38,6 +38,7 @@ import logging
 from logging.handlers import RotatingFileHandler
 import math
 import sys
+import traceback
 
 # Suppress warnings to reduce console clutter
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -147,10 +148,13 @@ class TourniquetObserver:
         log_file = os.path.join(DEBUG_LOG_DIR, "debug.log")
         
         try:
+            # Get module-level logger
+            logger = logging.getLogger(__name__)
+            
             # Configure logging with a custom formatter that includes more details
             formatter = logging.Formatter(
-                '%(asctime)s - %(levelname)s - [%(threadName)s] - %(message)s',
-                datefmt='%Y-%m-%d %H:%M:%S.%f'
+                '%(asctime)s.%(msecs)03d - %(levelname)s - [%(threadName)s] - %(message)s',
+                datefmt='%Y-%m-%d %H:%M:%S'
             )
             
             # Create a rotating file handler with size limit and backup count
@@ -168,10 +172,6 @@ class TourniquetObserver:
             console_handler.setFormatter(formatter)
             console_handler.setLevel(logging.INFO)
             
-            # Get the root logger and configure it
-            logger = logging.getLogger()
-            logger.setLevel(logging.DEBUG)
-            
             # Remove any existing handlers to avoid duplicates
             for handler in logger.handlers[:]:
                 logger.removeHandler(handler)
@@ -179,9 +179,10 @@ class TourniquetObserver:
             # Add our handlers
             logger.addHandler(file_handler)
             logger.addHandler(console_handler)
+            logger.setLevel(logging.DEBUG)
             
             # Log initialization information
-            logging.info(
+            logger.info(
                 "Tourniquet Observer initialized with enhanced logging\n"
                 f"Debug log file: {log_file}\n"
                 f"Max log size: {DEBUG_LOG_MAX_SIZE/1024/1024:.1f}MB\n"
@@ -192,7 +193,7 @@ class TourniquetObserver:
             )
             
             # Log system information
-            logging.debug(
+            logger.debug(
                 "System Information:\n"
                 f"Python version: {sys.version}\n"
                 f"OpenCV version: {cv2.__version__}\n"
@@ -203,7 +204,6 @@ class TourniquetObserver:
             
         except Exception as e:
             print(f"Error setting up logging: {e}")
-            import traceback
             print(traceback.format_exc())
     
     def calculate_center(self, bbox):
@@ -265,6 +265,8 @@ class TourniquetObserver:
         Returns:
             bool: True if the track is stable, False otherwise
         """
+        logger = logging.getLogger(__name__)
+        
         if track_id not in self.track_centers:
             return False
             
@@ -287,7 +289,7 @@ class TourniquetObserver:
         stability_percentage = stable_count / len(centers)
         
         # Log stability information for debugging
-        logging.debug(
+        logger.debug(
             f"Track {track_id} stability check:\n"
             f"  Total frames: {len(centers)}\n"
             f"  Stable frames: {stable_count}\n"
@@ -300,6 +302,7 @@ class TourniquetObserver:
     
     def update_model_detections(self, message):
         """Update the model detections text area with a message"""
+        logger = logging.getLogger(__name__)
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
         # Extract just the first line for GUI display (removes position, confidence, and bbox info)
@@ -310,20 +313,23 @@ class TourniquetObserver:
         self.app.root.after(0, lambda: self._update_text_area(formatted_message))
         
         # Log full detailed message to file
-        logging.info(message)
+        logger.info(message)
     
     def _update_text_area(self, message):
         """Helper method to update the text area (must be called from main thread)"""
+        logger = logging.getLogger(__name__)
         try:
             self.app.text_area2.config(state='normal')
             self.app.text_area2.insert(tk.END, message)
             self.app.text_area2.see(tk.END)  # Scroll to the end
             self.app.text_area2.config(state='disabled')
         except Exception as e:
-            logging.error(f"Error updating text area: {e}")
+            logger.error(f"Error updating text area: {e}")
     
     def log_track_info(self, track_id, center, stability_count):
         """Log detailed information about a track for debugging"""
+        logger = logging.getLogger(__name__)
+        
         if track_id not in self.track_centers:
             return
             
@@ -352,7 +358,7 @@ class TourniquetObserver:
             stability_percentage = stable_frames / len(deviations) if deviations else 0
             
             # Log detailed information including bbox and confidence
-            logging.debug(
+            logger.debug(
                 f"Track {track_id} Details:\n"
                 f"  Current Center: {center}\n"
                 f"  Average Center: {avg_center}\n"
@@ -373,6 +379,7 @@ class TourniquetObserver:
     
     def run(self):
         """Main observer loop that runs in a background thread"""
+        logger = logging.getLogger(__name__)
         frame_count = 0
         last_log_time = time.time()
         
@@ -396,7 +403,7 @@ class TourniquetObserver:
                         self.track_stability[track_id] = 0
                         self.track_last_seen[track_id] = current_time
                         self.track_history[track_id] = []
-                        logging.info(f"New track detected: {track_id} with bbox {track['bbox']} and confidence {track['confidence']:.3f}")
+                        logger.info(f"New track detected: {track_id} with bbox {track['bbox']} and confidence {track['confidence']:.3f}")
                     
                     # Calculate center of current bounding box
                     center = self.calculate_center(track['bbox'])
@@ -421,7 +428,7 @@ class TourniquetObserver:
                             f"  Confidence: {track['confidence']:.3f}\n"
                             f"  Bounding Box: {track['bbox']}"
                         )
-                        logging.info(
+                        logger.info(
                             f"Tourniquet {track_id} has been APPLIED\n"
                             f"  Final Position: {center}\n"
                             f"  Confidence: {track['confidence']:.3f}\n"
@@ -452,7 +459,7 @@ class TourniquetObserver:
                                         if track['id'] != track_id:  # Only update if it's a different ID
                                             # Update the track's ID to match the original
                                             track['id'] = track_id
-                                            logging.info(f"Track {track['id']} matched to existing track {track_id}")
+                                            logger.info(f"Track {track['id']} matched to existing track {track_id}")
                                         break
                 
                 # Clean up tracks that are no longer active and haven't been seen for a while
@@ -468,14 +475,14 @@ class TourniquetObserver:
                                 del self.track_last_seen[track_id]
                             if track_id in self.track_history:
                                 del self.track_history[track_id]
-                            logging.info(f"Track {track_id} removed (no longer active)")
+                            logger.info(f"Track {track_id} removed (no longer active)")
                 
                 # Increment frame counter
                 frame_count += 1
                 
                 # Log summary statistics periodically (every 5 seconds)
                 if current_time - last_log_time > 5.0:
-                    logging.info(
+                    logger.info(
                         f"Observer stats:\n"
                         f"  Active tracks: {len(active_tracks)}\n"
                         f"  Applied tourniquets: {len(self.applied_tracks)}\n"
@@ -483,7 +490,7 @@ class TourniquetObserver:
                         f"  Track details:"
                     )
                     for track in active_tracks:
-                        logging.info(
+                        logger.info(
                             f"    Track {track['id']}:\n"
                             f"      Position: {self.calculate_center(track['bbox'])}\n"
                             f"      Confidence: {track['confidence']:.3f}\n"
@@ -496,9 +503,8 @@ class TourniquetObserver:
                 time.sleep(0.1)
                 
             except Exception as e:
-                logging.error(f"Error in tourniquet observer: {e}")
-                import traceback
-                logging.error(traceback.format_exc())
+                logger.error(f"Error in tourniquet observer: {e}")
+                logger.error(traceback.format_exc())
                 time.sleep(0.5)  # Sleep longer on error
 
 class App:
@@ -641,13 +647,14 @@ class App:
         resizes them to match the YOLO input size, and adds them to the frame queue
         for processing.
         """
+        logger = logging.getLogger(__name__)
         pipeline = rs.pipeline()
         config = rs.config()
         config.enable_stream(rs.stream.color, RS_WIDTH, RS_HEIGHT, rs.format.bgr8, RS_FPS)
 
         try:
             pipeline.start(config)
-            print("[Capture] RealSense camera started successfully")
+            logger.info("[Capture] RealSense camera started successfully")
             timeout_ms = 1000  # 1 second timeout
 
             while not self.stop_event.is_set():
@@ -656,7 +663,7 @@ class App:
                     color_frame = frames.get_color_frame()
                     
                     if not color_frame:
-                        print("[Capture] Empty frame received. Retrying...")
+                        logger.debug("[Capture] Empty frame received. Retrying...")
                         continue
 
                     color_image = np.asanyarray(color_frame.get_data())
@@ -668,28 +675,28 @@ class App:
 
                 except RuntimeError as e:
                     if "Frame didn't arrive" in str(e):
-                        print("[Capture] Frame timeout, attempting to recover...")
+                        logger.warning("[Capture] Frame timeout, attempting to recover...")
                         try:
                             pipeline.stop()
                             time.sleep(1)
                             pipeline.start(config)
                         except Exception as restart_error:
-                            print(f"[Capture] Failed to restart pipeline: {restart_error}")
+                            logger.error(f"[Capture] Failed to restart pipeline: {restart_error}")
                     else:
-                        print(f"[Capture] Runtime error: {e}")
+                        logger.error(f"[Capture] Runtime error: {e}")
                     time.sleep(0.1)
                 except Exception as e:
-                    print(f"[Capture] Exception: {e}")
+                    logger.error(f"[Capture] Exception: {e}")
                     time.sleep(0.1)
 
         except Exception as e:
-            print(f"[Capture] Failed to initialize RealSense camera: {e}")
+            logger.error(f"[Capture] Failed to initialize RealSense camera: {e}")
         finally:
             try:
                 pipeline.stop()
-                print("[Capture] RealSense pipeline stopped")
+                logger.info("[Capture] RealSense pipeline stopped")
             except Exception as e:
-                print(f"[Capture] Error stopping pipeline: {e}")
+                logger.error(f"[Capture] Error stopping pipeline: {e}")
 
     def detect_motion(self, current_frame, last_frame):
         """
@@ -950,6 +957,7 @@ class App:
         It applies object detection, pose estimation, and tracking to each frame,
         then adds the annotated frames to the processed queue for display.
         """
+        logger = logging.getLogger(__name__)
         frame_count = 0
         last_log_time = time.time()
         
@@ -962,7 +970,7 @@ class App:
                         frame = self.frame_queue.get(timeout=1.0)
                         batch_frames.append(frame)
                     except queue.Empty:
-                        print("[Pipeline] No frames available, skipping batch")
+                        logger.debug("[Pipeline] No frames available, skipping batch")
                         continue
 
                 if not batch_frames:
@@ -1072,9 +1080,8 @@ class App:
                                 self.update_tracks(boxes, batch_for_detection[0])
                                 self.predict_track_positions()
                     except Exception as e:
-                        print(f"[Detection Worker] Error: {e}")
-                        import traceback
-                        traceback.print_exc()
+                        logger.error(f"[Detection Worker] Error: {e}")
+                        logger.error(traceback.format_exc())
 
                 def pose_worker():
                     try:
@@ -1086,9 +1093,8 @@ class App:
                             else:
                                 pose_results[i] = []
                     except Exception as e:
-                        print(f"[Pose Worker] Error: {e}")
-                        import traceback
-                        traceback.print_exc()
+                        logger.error(f"[Pose Worker] Error: {e}")
+                        logger.error(traceback.format_exc())
 
                 # Create and run threads
                 t_detect = threading.Thread(target=detection_worker)
@@ -1128,14 +1134,12 @@ class App:
                 # Log summary statistics periodically (every 5 seconds)
                 current_time = time.time()
                 if current_time - last_log_time > 5.0:
-                    print(f"[Pipeline] Stats: {len(self.active_tracks)} active tracks, "
-                          f"{frame_count} frames processed")
+                    logger.info(f"[Pipeline] Stats: {len(self.active_tracks)} active tracks, {frame_count} frames processed")
                     last_log_time = current_time
 
             except Exception as e:
-                print(f"[Pipeline] Exception: {e}")
-                import traceback
-                traceback.print_exc()
+                logger.error(f"[Pipeline] Exception: {e}")
+                logger.error(traceback.format_exc())
                 time.sleep(0.1)
 
     def annotate_frame(self, frame, detections, keypoints):
@@ -1218,6 +1222,7 @@ class App:
         This method initializes a video writer and begins recording frames
         from the recording buffer to a file.
         """
+        logger = logging.getLogger(__name__)
         if not self.is_recording:
             # Clear recording buffer
             self.recording_buffer.clear()
@@ -1231,11 +1236,11 @@ class App:
             self.video_writer = cv2.VideoWriter(output_file, fourcc, OUTPUT_FPS, (FRAME_WIDTH, FRAME_HEIGHT))
             
             if not self.video_writer.isOpened():
-                print(f"[Video] Failed to open video writer for {output_file}")
+                logger.error(f"[Video] Failed to open video writer for {output_file}")
                 return
             
             self.is_recording = True
-            print(f"[Video] Started recording to {output_file}")
+            logger.info(f"[Video] Started recording to {output_file}")
 
     def stop_recording(self):
         """
@@ -1244,6 +1249,7 @@ class App:
         This method writes all frames from the recording buffer to the video file
         and releases the video writer.
         """
+        logger = logging.getLogger(__name__)
         if self.is_recording and self.video_writer:
             # Write all frames from recording buffer
             for frame in self.recording_buffer:
@@ -1252,7 +1258,7 @@ class App:
             self.video_writer.release()
             self.video_writer = None
             self.is_recording = False
-            print("[Video] Stopped recording")
+            logger.info("[Video] Stopped recording")
 
     def export_data(self):
         """
@@ -1261,11 +1267,12 @@ class App:
         This method exports various data from the application, such as
         detection results, tracking information, and logs.
         """
+        logger = logging.getLogger(__name__)
         try:
             # TODO: Add other export functionality here (audio, transcript, etc.)
-            print("[Export] Exporting data...")
+            logger.info("[Export] Exporting data...")
         except Exception as e:
-            print(f"[Export] Error during export: {e}")
+            logger.error(f"[Export] Error during export: {e}")
 
     def save_debug_video(self):
         """
@@ -1273,6 +1280,7 @@ class App:
         
         This method saves the recording buffer to a video file for debugging purposes.
         """
+        logger = logging.getLogger(__name__)
         if SAVE_DEBUG_VIDEO and self.recording_buffer:
             try:
                 # Generate timestamp for filename
@@ -1288,11 +1296,11 @@ class App:
                     for frame in self.recording_buffer:
                         video_writer.write(frame)
                     video_writer.release()
-                    print(f"[Debug] Saved debug video to {output_file}")
+                    logger.info(f"[Debug] Saved debug video to {output_file}")
                 else:
-                    print(f"[Debug] Failed to open video writer for {output_file}")
+                    logger.error(f"[Debug] Failed to open video writer for {output_file}")
             except Exception as e:
-                print(f"[Debug] Error saving debug video: {e}")
+                logger.error(f"[Debug] Error saving debug video: {e}")
 
     def update_video(self):
         """
@@ -1345,6 +1353,7 @@ class App:
         This method initializes and starts the capture and processing threads,
         as well as the tourniquet observer.
         """
+        logger = logging.getLogger(__name__)
         self.stop_event.clear()
         self.observer_stop_event.clear()
         self.pipeline_running = True
@@ -1375,7 +1384,7 @@ class App:
         # Start tourniquet observer with its dedicated stop event
         self.tourniquet_observer = TourniquetObserver(self, self.observer_stop_event)
         
-        print("Starting video pipeline...")
+        logger.info("Starting video pipeline...")
 
     def stop_pipeline(self):
         """
@@ -1384,35 +1393,32 @@ class App:
         This method signals all threads to stop and waits for them to finish.
         It also resets the display to a blank frame.
         """
-        # --- Diagnostic Logging --- >
-        logging.warning(f"stop_pipeline called. Current pipeline_running state: {self.pipeline_running}") 
-        import traceback 
-        logging.warning("Stack trace leading to stop_pipeline:\n" + "".join(traceback.format_stack()))
-        # --- End Diagnostic Logging ---
+        logger = logging.getLogger(__name__)
+        logger.info("Stopping pipeline... (running=%s)", self.pipeline_running)
         
         self.stop_event.set() # Signal main pipeline threads to stop
-        if self.tourniquet_observer: # Signal observer thread to stop
-             self.observer_stop_event.set()
-             
+        
+        # Signal observer thread to stop and wait for it to finish
+        if self.tourniquet_observer:
+            self.observer_stop_event.set()
+            self.tourniquet_observer.observer_thread.join(timeout=3)
+        
+        # Wait for other threads to finish
+        for t in (self.capture_thread, self.pipeline_thread):
+            if t:
+                t.join(timeout=3)
+        
         self.pipeline_running = False
-        
-        # Wait for threads to finish
-        if self.capture_thread:
-            self.capture_thread.join(timeout=3)
-        if self.pipeline_thread:
-            self.pipeline_thread.join(timeout=3)
-        
-        # Reset to blank frame
         self.last_valid_frame = self.blank_frame.copy()
         
         # Log final message before shutdown
-        logging.info(
-            "Pipeline shutdown initiated\n"
+        applied = len(self.tourniquet_observer.applied_tracks) if self.tourniquet_observer else 0
+        logger.info(
+            "Pipeline stopped cleanly\n"
             f"Final stats:\n"
             f"  Active tracks: {len(self.active_tracks)}\n"
-            f"  Applied tourniquets: {len(self.tourniquet_observer.applied_tracks) if self.tourniquet_observer else 0}\n"
-            f"  Debug log location: {os.path.join(DEBUG_LOG_DIR, 'debug.log')}\n"
-            "Logging will continue to append to debug.log until application exit"
+            f"  Applied tourniquets: {applied}\n"
+            f"  Debug log location: {os.path.join(DEBUG_LOG_DIR, 'debug.log')}"
         )
         
         print("Stopping video pipeline...")
@@ -1424,6 +1430,9 @@ class App:
         This method is called when the application window is closed.
         It stops the pipeline, saves debug video if enabled, and destroys the root window.
         """
+        logger = logging.getLogger(__name__)
+        logger.info("Application closing, cleaning up resources...")
+        
         if self.pipeline_running:
             self.stop_pipeline()
         
@@ -1431,7 +1440,11 @@ class App:
         if SAVE_DEBUG_VIDEO:
             self.save_debug_video()
         
+        # Destroy the root window
         self.root.destroy()
+        
+        # Properly shut down logging
+        logging.shutdown()
 
     def toggle_transcription(self):
         """
