@@ -1,4 +1,4 @@
-# Tourniquet Detection and Tracking System
+# TC3 Real-Time Detection and Documentation System
 
 A real-time computer vision system for detecting and tracking tourniquets in video feeds, designed for medical training and assistance scenarios. The system uses YOLO object detection models and implements a tracking system to monitor tourniquet stability, helping to detect when a tourniquet has been properly applied.
 
