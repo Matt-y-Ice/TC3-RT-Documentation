@@ -50,17 +50,18 @@ Transcribed speech is displayed in a side panel with associated timestamps and d
 
 ## Requirements
 
-- Python 3.8+
-- OpenCV
-- PyTorch
-- Ultralytics YOLO
-- NumPy, SciPy
-- Tkinter (for GUI)
-- Intel RealSense SDK (optional)
-- Sounddevice, Transformers, Pydub (for audio capture and processing)
-- OpenAI Whisper model (or equivalent wrapper)
-- NLP toolkit (e.g., spaCy or transformers for contextual analysis)
-
+- [Python 3.8+](https://www.python.org/downloads/)
+- [OpenCV](https://opencv.org/)
+- [PyTorch](https://pytorch.org/)
+- [Ultralytics YOLO](https://docs.ultralytics.com/)
+- [Intel RealSense SDK](https://www.intelrealsense.com/sdk-2/)
+- [Tkinter (Python GUI)](https://docs.python.org/3/library/tkinter.html)
+- [NumPy](https://numpy.org/)
+- [SciPy](https://scipy.org/)
+- [Sounddevice](https://python-sounddevice.readthedocs.io/)
+- [Pydub](https://github.com/jiaaro/pydub)
+- [Whisper (OpenAI)](https://github.com/openai/whisper)
+- [spaCy (for NLP)](https://spacy.io/)
 ---
 
 ## Installation
