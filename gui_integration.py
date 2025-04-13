@@ -33,7 +33,13 @@ import time
 import re
 import warnings
 import numpy as np
-import pyrealsense2 as rs
+# Make pyrealsense2 optional
+try:
+    import pyrealsense2 as rs
+    REALSENSE_AVAILABLE = True
+except ImportError:
+    REALSENSE_AVAILABLE = False
+    print("Warning: RealSense SDK not available. Will use webcam if available.")
 from ultralytics import YOLO
 from collections import deque
 from datetime import datetime
@@ -891,6 +897,9 @@ class App:
         if not os.path.exists(OUTPUT_DIR):
             os.makedirs(OUTPUT_DIR)
 
+        # Select camera type
+        self._select_camera()
+
         # Setup main GUI components
         self.setup_gui()
         
@@ -924,6 +933,51 @@ class App:
         # Start the video update loop immediately
         self.update_video()
         
+    def _select_camera(self):
+        """
+        Figure out whether a RealSense is plugged in and usable.
+        Sets self.cam_kind to either "realsense" or "webcam".
+        """
+        logger = logging.getLogger(__name__)
+        
+        if REALSENSE_AVAILABLE:
+            try:
+                ctx = rs.context()
+                if len(ctx.query_devices()) > 0:
+                    self.cam_kind = "realsense"
+                    logger.info("RealSense camera detected and will be used")
+                    return  # ✅ RS found
+            except Exception as e:
+                logger.warning(f"Error checking for RealSense camera: {e}")
+        
+        # Fallback to webcam
+        self.cam_kind = "webcam"
+        logger.info("No RealSense camera detected, will use webcam")
+        
+    def _find_working_webcam(self, max_index: int = 10):
+        """
+        Return (index, backend) of the first webcam that opens, or (None, None).
+
+        On Windows we try CAP_DSHOW then CAP_MSMF;
+        on macOS CAP_AVFOUNDATION;
+        on Linux we try CAP_V4L2 then GStreamer.
+        """
+        os_name = sys.platform
+        backend_candidates = {
+            "win32":  [cv2.CAP_DSHOW, cv2.CAP_MSMF],
+            "darwin": [cv2.CAP_AVFOUNDATION],
+            "linux":  [cv2.CAP_V4L2, cv2.CAP_GSTREAMER],
+        }.get(os_name, [cv2.CAP_ANY])
+
+        for backend in backend_candidates:
+            for idx in range(max_index):
+                cap = cv2.VideoCapture(idx, backend)
+                if cap.isOpened():
+                    cap.release()
+                    return idx, backend
+                cap.release()
+        return None, None
+
     def setup_gui(self):
         """
         Setup the graphical user interface components.
@@ -1058,13 +1112,26 @@ class App:
 
     def capture_frames(self):
         """
-        Continuously capture frames from the RealSense camera.
+        Continuously capture frames from the selected camera.
         
         This method runs in a separate thread and captures frames from the camera,
         resizes them to match the YOLO input size, and adds them to the frame queue
         for processing.
         """
         logger = logging.getLogger(__name__)
+        
+        if self.cam_kind == "realsense":
+            self._capture_realsense(logger)
+        else:
+            self._capture_webcam(logger)
+            
+    def _capture_realsense(self, logger):
+        """
+        Capture frames from the RealSense camera.
+        
+        Args:
+            logger: Logger instance for logging
+        """
         pipeline = rs.pipeline()
         config = rs.config()
         config.enable_stream(rs.stream.color, RS_WIDTH, RS_HEIGHT, rs.format.bgr8, RS_FPS)
@@ -1073,6 +1140,9 @@ class App:
             pipeline.start(config)
             logger.info("[Capture] RealSense camera started successfully")
             timeout_ms = 1000  # 1 second timeout
+            
+            # For reduced logging frequency
+            last_warn = 0
 
             while not self.stop_event.is_set():
                 try:
@@ -1080,7 +1150,11 @@ class App:
                     color_frame = frames.get_color_frame()
                     
                     if not color_frame:
-                        logger.debug("[Capture] Empty frame received. Retrying...")
+                        # Only log once per second to avoid spamming
+                        current_time = time.time()
+                        if current_time - last_warn > 1:
+                            logger.debug("[Capture] Empty frame received. Retrying...")
+                            last_warn = current_time
                         continue
 
                     color_image = np.asanyarray(color_frame.get_data())
@@ -1092,7 +1166,11 @@ class App:
 
                 except RuntimeError as e:
                     if "Frame didn't arrive" in str(e):
-                        logger.warning("[Capture] Frame timeout, attempting to recover...")
+                        # Only log once per second to avoid spamming
+                        current_time = time.time()
+                        if current_time - last_warn > 1:
+                            logger.warning("[Capture] Frame timeout, attempting to recover...")
+                            last_warn = current_time
                         try:
                             pipeline.stop()
                             time.sleep(1)
@@ -1114,6 +1192,118 @@ class App:
                 logger.info("[Capture] RealSense pipeline stopped")
             except Exception as e:
                 logger.error(f"[Capture] Error stopping pipeline: {e}")
+                
+    def _capture_webcam(self, logger):
+        """
+        Capture frames from the webcam.
+        
+        Args:
+            logger: Logger instance for logging
+        """
+        # Find a working webcam
+        index, backend = self._find_working_webcam()
+        if index is None:
+            logger.error("[Capture] No webcam detected after probing 0-9")
+            self._display_no_camera_message()
+            return
+            
+        # Try to open the webcam with the found index and backend
+        cap = cv2.VideoCapture(index, backend)
+        if not cap.isOpened():
+            logger.error("[Capture] Failed to open webcam with index %d and backend %d", index, backend)
+            self._display_no_camera_message()
+            return
+
+        # Set webcam properties
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, RS_WIDTH)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, RS_HEIGHT)
+        cap.set(cv2.CAP_PROP_FPS, RS_FPS)
+
+        logger.info("[Capture] Webcam started successfully with index %d and backend %d", index, backend)
+        
+        # For reduced logging frequency
+        last_warn = 0
+
+        while not self.stop_event.is_set():
+            try:
+                ret, frame = cap.read()
+                if not ret:
+                    # Only log once per second to avoid spamming
+                    current_time = time.time()
+                    if current_time - last_warn > 1:
+                        logger.warning("[Capture] Webcam read failed – waiting for device…")
+                        last_warn = current_time
+                    time.sleep(0.05)
+                    continue
+
+                # Frame is already BGR; just resize once to YOLO size
+                frame_resized = cv2.resize(frame, (FRAME_WIDTH, FRAME_HEIGHT))
+                if not self.frame_queue.full():
+                    self.frame_queue.put(frame_resized)
+
+            except Exception as e:
+                logger.error(f"[Capture] Exception: {e}")
+                time.sleep(0.1)
+
+        cap.release()
+        logger.info("[Capture] Webcam pipeline stopped")
+        
+    def _display_no_camera_message(self):
+        """
+        Display a helpful message in the GUI when no camera is available.
+        """
+        # Create a message frame with helpful information
+        message_frame = np.zeros((FRAME_HEIGHT, FRAME_WIDTH, 3), dtype=np.uint8)
+        
+        # Add title
+        cv2.putText(message_frame, "No Camera Available", (10, 50),
+                   cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+        
+        # Add platform-specific troubleshooting tips
+        if sys.platform == "linux":
+            tips = [
+                "Linux Troubleshooting:",
+                "1. Check if user is in the video group: groups $USER",
+                "2. Verify camera exists: ls /dev/video*",
+                "3. Check if camera is in use: lsof /dev/video0",
+                "4. Try a different USB port (USB 3 preferred)",
+                "5. Install v4l-utils and run: v4l2-ctl --list-devices"
+            ]
+        elif sys.platform == "win32":
+            tips = [
+                "Windows Troubleshooting:",
+                "1. Check Device Manager for camera",
+                "2. Verify camera privacy settings",
+                "3. Close other apps using the camera",
+                "4. Try a different USB port"
+            ]
+        elif sys.platform == "darwin":
+            tips = [
+                "macOS Troubleshooting:",
+                "1. Grant camera permission in System Settings",
+                "2. Close other apps using the camera",
+                "3. Try a different USB port"
+            ]
+        else:
+            tips = [
+                "Troubleshooting:",
+                "1. Check if camera is connected",
+                "2. Close other apps using the camera",
+                "3. Try a different USB port"
+            ]
+        
+        # Add tips to the message frame
+        for i, tip in enumerate(tips):
+            y_pos = 100 + i * 30
+            cv2.putText(message_frame, tip, (10, y_pos),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 1)
+        
+        # Add the message frame to the frame queue
+        if not self.frame_queue.full():
+            self.frame_queue.put(message_frame)
+            
+        # Update the last valid frame
+        self.last_valid_frame = message_frame.copy()
 
     def detect_motion(self, current_frame, last_frame):
         """
@@ -1577,7 +1767,8 @@ class App:
         annotated = frame.copy()
 
         # Calculate scaling factors for coordinate conversion
-        y_scale = RS_HEIGHT / FRAME_HEIGHT  # 480/640 = 0.75
+        # Use appropriate height based on camera type
+        y_scale = (RS_HEIGHT if self.cam_kind == 'realsense' else FRAME_HEIGHT) / FRAME_HEIGHT
 
         # Draw tracked objects
         for track in self.active_tracks:
@@ -1801,7 +1992,7 @@ class App:
         # Start tourniquet observer with its dedicated stop event
         self.tourniquet_observer = TourniquetObserver(self, self.observer_stop_event)
         
-        logger.info("Starting video pipeline...")
+        logger.info(f"Starting video pipeline with {self.cam_kind} camera...")
 
     def stop_pipeline(self):
         """

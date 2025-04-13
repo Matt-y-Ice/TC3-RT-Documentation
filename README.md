@@ -1,114 +1,79 @@
-# TC3 Real-Time Detection and Documentation System
+# Tourniquet Detection and Tracking System
 
-A real-time computer vision system for detecting and tracking tourniquets in video feeds, designed for medical training and assistance scenarios. The system uses YOLO object detection models and implements a tracking system to monitor tourniquet stability, helping to detect when a tourniquet has been properly applied.
+This application provides a real-time computer vision system for detecting and tracking
+tourniquets in video feeds. It uses YOLO object detection models to identify tourniquets
+and implements a tracking system to monitor their stability. The system is designed to
+detect when a tourniquet has been properly applied based on position stability.
 
-## Features
+## Key Features
 
-- **Real-time Video Processing**
-  - Integration with Intel RealSense cameras
-  - Multi-scale object detection using YOLO models
-  - Feature tracking and motion detection for improved reliability
-  - Tourniquet stability monitoring to detect proper application
+- **Camera Agility**: Automatically detects and uses Intel RealSense cameras when available, with seamless fallback to standard webcams when RealSense is not detected
+- Real-time video processing from camera input
+- Multi-scale object detection using YOLO models
+- Feature tracking and motion detection for improved reliability
+- Tourniquet stability monitoring to detect proper application
+- GUI interface with live video feed and detection information
+- Debug logging and video recording capabilities
+- Real-time audio processing and speech transcription
+- Adaptive audio threshold for speech detection
+- Audio transcription with timestamps and duration
 
-- **Audio Processing**
-  - Real-time speech transcription
-  - Adaptive audio threshold for speech detection
-  - Timestamped transcriptions with duration tracking
-  - Hands-free operation support
+## Requirements
 
-- **User Interface**
-  - Live video feed display
-  - Real-time detection information
-  - Live transcript display
-  - Model detection logging
-  - Start/Stop controls
-  - Data export capabilities
-
-- **Debug Features**
-  - Comprehensive logging system
-  - Debug video recording
-  - Track history visualization
-  - Motion detection visualization
-
-## Prerequisites
-
-- Python 3.8 or higher
-- Intel RealSense camera (for video input)
-- CUDA-capable GPU (recommended for optimal performance)
-- Microphone (for audio features)
+- Python 3.8+
+- OpenCV
+- PyTorch
+- Ultralytics YOLO
+- Intel RealSense SDK (optional - for RealSense camera support)
+- Tkinter (for GUI)
+- NumPy
+- SciPy
+- Sounddevice, Transformers, Pydub (for audio features)
 
 ## Installation
 
-1. Clone the repository:
-```bash
-git clone https://github.com/yourusername/tourniquet-detection-system.git
-cd tourniquet-detection-system
-```
-
-2. Install required packages:
-```bash
-pip install -r requirements.txt
-```
-
-3. Download the required YOLO models:
-   - Place `yolo11n.pt` in the `models/` directory
-   - Place `yolo11n-pose.pt` in the `models/` directory
-   - Place `whisper-small-en-finetuned` in the `models/` directory
+1. Clone the repository
+2. Install dependencies:
+   ```
+   pip install -r requirements.txt
+   ```
+3. For RealSense support, install the Intel RealSense SDK:
+   ```
+   pip install pyrealsense2
+   ```
 
 ## Usage
 
-1. Start the application:
-```bash
+Run the application with:
+```
 python gui_integration.py
 ```
 
-2. The application will open with:
-   - Live video feed on the left
-   - Transcript and detection information on the right
-   - Control buttons at the bottom
+The application will:
+1. Check for an Intel RealSense camera
+2. If RealSense is detected, use it for video input
+3. If RealSense is not available, automatically fall back to a standard webcam
+4. Display the video feed with real-time tourniquet detection and tracking
+5. Show detection information in the GUI
+6. Record audio and transcribe speech if audio features are enabled
 
-3. Click "Start Demo" to begin:
-   - Video processing will start
-   - Audio transcription will begin (if microphone is available)
-   - Detections will be displayed in real-time
+## Camera Troubleshooting
 
-4. Click "Stop Demo" to end the session
+If you're experiencing camera issues:
 
-5. Use "Export Data" to save session information
+### For RealSense cameras:
+- Ensure the RealSense SDK is properly installed
+- Check USB connections (USB 3.0 recommended)
+- Verify the camera is recognized by the system
 
-## Configuration
-
-The system can be configured by modifying the following parameters in `gui_integration.py`:
-
-- Video parameters (resolution, FPS)
-- Detection confidence thresholds
-- Audio processing parameters
-- Tracking parameters
-- Stability thresholds
-
-## Output
-
-The system generates several types of output:
-
-- Live video feed with detection overlays
-- Real-time transcriptions
-- Detection logs
-- Debug videos (if enabled)
-- Session data exports
-
-All output files are saved in the `output/` directory, organized by date and time.
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
+### For webcams:
+- Check if the camera is properly connected
+- Ensure no other applications are using the camera
+- Try a different USB port
+- On Linux, verify your user is in the video group: `groups $USER`
+- On Windows, check Device Manager for camera status
+- On macOS, verify camera permissions in System Settings
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
-
-## Acknowledgments
-
-- YOLO model developers
-- Intel RealSense team
-- Whisper model developers
-- OpenCV community 
+[Your License Information] 
