@@ -1,6 +1,25 @@
 # Tourniquet Detection and Tracking System
 
+![Python](https://img.shields.io/badge/Python-3.8%2B-blue)
+![YOLO](https://img.shields.io/badge/YOLO-v8-green)
+![Whisper](https://img.shields.io/badge/Whisper-OpenAI-orange)
+![PyTorch](https://img.shields.io/badge/PyTorch-Deep%20Learning-EE4C2C)
+![Tkinter](https://img.shields.io/badge/GUI-Tkinter-red)
+![Audio](https://img.shields.io/badge/Audio-Real--Time-orange)
+![NLP](https://img.shields.io/badge/NLP-Contextual%20Extraction-purple)
+![Status](https://img.shields.io/badge/Status-Active-blue)
+
 This application provides a real-time computer vision and audio processing system for detecting, tracking, and verifying the correct application of tourniquets in live video feeds. It integrates object detection, motion tracking, speech transcription, and contextual analysis.
+
+## Table of Contents
+
+- [Features](#features)
+- [Video Processing](#video-processing)
+- [Audio Processing](#audio-processing)
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Usage](#usage)
+- [Camera Troubleshooting](#camera-troubleshooting)
 
 ## Features
 
