@@ -132,3 +132,7 @@ The system will:
 - On Linux: add user to the `video` group (`groups $USER`)
 - On Windows: use Device Manager for diagnostics.
 - On macOS: allow camera permissions via System Settings.
+
+---
+ ## Whisper Model
+ [Whisper Model](https://drive.google.com/file/d/11CTa0q346j63IOIqkAkC5FrIHc3hCOO0/view?usp=drive_link)
