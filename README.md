@@ -81,6 +81,10 @@ Transcribed speech is displayed in a side panel with associated timestamps and d
 - [Pydub](https://github.com/jiaaro/pydub)
 - [Whisper (OpenAI)](https://github.com/openai/whisper)
 - [spaCy (for NLP)](https://spacy.io/)
+
+ ## Whisper Model
+ [Pre-Trained Whisper Model](https://drive.google.com/file/d/11CTa0q346j63IOIqkAkC5FrIHc3hCOO0/view?usp=drive_link) **OR** [Train your own](https://github.com/TaylorBrown96/CSC-490)
+ 
 ---
 
 ## Installation
