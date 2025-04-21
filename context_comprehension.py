@@ -1,8 +1,18 @@
 import spacy
 import re
+import os
 
 # Load spaCy's English model
-nlp = spacy.load("en_core_web_sm")
+try:
+    # Try to load the model directly
+    nlp = spacy.load("en_core_web_sm")
+except OSError:
+    # If the model is not available, create a simple pipeline
+    print("Warning: Spacy model not found. Using a simple pipeline instead.")
+    nlp = spacy.blank("en")
+    # Add a simple tokenizer
+    if "tokenizer" not in nlp.pipe_names:
+        nlp.add_pipe("tokenizer")
 
 # Global variable for confirmed placement
 CONFIRMED_PLACEMENT = None
