@@ -1,0 +1,13 @@
+2025-04-22 10:59:11.096 - INFO - [MainThread] - Tourniquet Observer initialized with enhanced logging
+Debug log file: output\logs\debug.log
+Max log size: 1.0MB
+Backup count: 5
+Stability threshold: 50 pixels
+Stability frames: 30
+Stability percentage: 80.0%
+2025-04-22 10:59:11.097 - DEBUG - [MainThread] - System Information:
+Python version: 3.12.9 | packaged by Anaconda, Inc. | (main, Feb  6 2025, 18:49:16) [MSC v.1929 64 bit (AMD64)]
+OpenCV version: 4.11.0
+Working directory: C:\School Stuff\Capstone\TC3-RT-Documentation-main\TC3-RT-Documentation-main
+Log directory: output\logs
+Log file permissions: 666
